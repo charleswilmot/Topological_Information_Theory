@@ -1,0 +1,5 @@
+type: ???
+
+defaults:
+  - hydra: default
+  - database: debug

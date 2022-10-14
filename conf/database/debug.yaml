@@ -1,0 +1,3 @@
+url: sqlite:///./databases/debug.sqlite
+echo: False
+future: True

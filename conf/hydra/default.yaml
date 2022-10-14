@@ -1,0 +1,55 @@
+run:
+  dir: outputs/${now:%Y-%m-%d}/${now:%H-%M-%S}/0
+sweep:
+  dir: multirun/${now:%Y-%m-%d}/${now:%H-%M-%S}
+  subdir: ${hydra.job.num}
+
+
+hydra_logging:
+  version: 1
+  formatters:
+    simple:
+      format: '{relativeCreated:12.3f}   {levelname: <8}  HYDRA                          {message}'
+      style: '{'
+  root:
+    level: INFO
+    handlers:
+    - console
+  loggers:
+    logging_example:
+      level: DEBUG
+  disable_existing_loggers: false
+job_logging:
+  version: 1
+  formatters:
+    simple:
+      format: '{relativeCreated:12.3f}   {levelname: <8}  {name: <30} {message}'
+      style: '{'
+  handlers:
+    console:
+      class: logging.StreamHandler
+      formatter: simple
+      stream: ext://sys.stdout
+    file:
+      class: logging.FileHandler
+      formatter: simple
+      filename: ${hydra.runtime.output_dir}/${hydra.job.name}.log
+  root:
+    level: INFO
+    handlers:
+    - console
+    - file
+  loggers:
+    sqlalchemy:
+      level: WARNING
+    absl:
+      level: CRITICAL
+  disable_existing_loggers: false
+
+
+job:
+  config:
+    override_dirname:
+      kv_sep: '='
+      item_sep: ','
+      exclude_keys: []

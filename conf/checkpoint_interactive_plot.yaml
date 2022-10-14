@@ -1,0 +1,7 @@
+experiment_id: ???
+repetition_id: ???
+checkpoint: ???
+
+defaults:
+  - hydra: default
+  - database: debug
