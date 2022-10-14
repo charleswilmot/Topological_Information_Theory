@@ -253,24 +253,24 @@ class DimensionCollapse(ExperimentType1):
         self.embedding_dimension = self.shp._embedding_dimension
 
         def forward():
-            encoder = hk.nets.MLP(
+            encode = hk.nets.MLP(
                 [self.embedding_dimension * self.dilation_factor] * self.network_depth +
                 [self.bottleneck_dimension],
                 activation=jnp.tanh,
                 activate_final=True,
             )
-            decoder = hk.nets.MLP(
+            decode = hk.nets.MLP(
                 [self.embedding_dimension * self.dilation_factor] * (self.network_depth - 1) +
                 [self.embedding_dimension],
                 activation=jnp.tanh,
             )
 
             def init(x):
-                z = encoder(x)
-                xx = decoder(z)
+                z = encode(x)
+                xx = decode(z)
                 return xx
 
-            return init, (encoder, decoder)
+            return init, (encode, decode)
 
         self.network = hk.without_apply_rng(hk.multi_transform(forward))
         self.encode, self.decode = self.network.apply
@@ -316,24 +316,24 @@ class DimensionProject(ExperimentType1):
         self.embedding_dimension = self.shp._embedding_dimension
 
         def forward():
-            encoder = hk.nets.MLP(
+            encode = hk.nets.MLP(
                 [self.embedding_dimension * self.dilation_factor] * self.network_depth +
                 [self.bottleneck_dimension],
                 activation=jnp.tanh,
             )
-            decoder = hk.nets.MLP(
+            decode = hk.nets.MLP(
                 [self.embedding_dimension * self.dilation_factor] * (self.network_depth - 1) +
                 [self.embedding_dimension],
                 activation=jnp.tanh,
             )
 
             def init(x):
-                z = encoder(x)
+                z = encode(x)
                 projection, metadata = self.shp.project(z)
-                xx = decoder(projection)
+                xx = decode(z)
                 return xx
 
-            return init, (encoder, decoder)
+            return init, (encode, decode)
 
         self.network = hk.without_apply_rng(hk.multi_transform(forward))
         self.encode, self.decode = self.network.apply
