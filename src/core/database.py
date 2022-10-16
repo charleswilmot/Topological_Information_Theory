@@ -23,19 +23,42 @@ class TableMeta(type):
             namespace['__tablename__'] = re.sub(r'(?<!^)(?=[A-Z])', '_', name).lower() + 's'
         if '__sa_dataclass_metadata_key__' not in namespace:
             namespace['__sa_dataclass_metadata_key__'] = 'sa'
+        return name, bases, namespace
 
 
 class ExperimentTableMeta(TableMeta):
     def __before_sql_decorator__(mcs, name, bases, namespace):
         super().__before_sql_decorator__(mcs, name, bases, namespace)
-        if '__table_args__' not in namespace:
-            raise ValueError(f"class {name} is missing a __table_args__ static member")
-        __table_args__ = namespace['__table_args__']
-        if not any(map(lambda c: c.name == 'conf_unicity', __table_args__)):
-            raise ValueError(f"class {name} is missing a constraint with name conf_unicity in its __table_args__")
         if '__mapper_args__' not in namespace:
             namespace['__mapper_args__'] = {}
+        if '__annotations__' not in namespace:
+            namespace['__annotations__'] = {}
+        if '__table_args__' not in namespace:
+            namespace['__table_args__'] = ()
+        if any(map(lambda c: c.name == 'conf_unicity', namespace['__table_args__'])):
+            raise ValueError(f"class {name} already has a constraint with name conf_unicity in its __table_args__")
+
+        # configure the polymorphic properties
         namespace['__mapper_args__']['polymorphic_identity'] = name
+        namespace['__mapper_args__']['polymorphic_on'] = 'type'
+
+        if not len(bases) or bases[-1] is object: # root experiment class
+            # add the 'id' column to the root class
+            id_col = sql.Column(sql.Integer, primary_key=True)
+            namespace['__annotations__']['id'] = int
+            namespace['id'] = field(init=False, sql=id_col)
+            # add the 'type' column to the root class
+            type_col = sql.Column(sql.String(64))
+            namespace['__annotations__']['type'] = str
+            namespace['type'] = field(init=False, sql=type_col)
+            # add the 'path' column_property to the root class
+            namespace['__annotations__']['path'] = str
+            namespace['path'] = field(init=False, sql=orm.column_property(sql.func.printf("%s/%02d", type_col, id_col)))
+        else:              # some subclass of the root class
+            # add the 'id' column to the subclass
+            id_col = sql.Column(sql.Integer, sql.ForeignKey(f'{bases[-1].__tablename__}.id'), primary_key=True)
+            namespace['__annotations__']['id'] = int
+            namespace['id'] = field(init=False, sql=id_col)
         return name, bases, namespace
 
 

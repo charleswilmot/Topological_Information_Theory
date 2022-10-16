@@ -1,9 +1,9 @@
 import sqlalchemy as sql
 import sqlalchemy.orm as orm
-from dataclasses import dataclass, MISSING, fields
+from dataclasses import MISSING, fields
 import yaml
 import re
-from .database import mapper_registry, field, ExperimentTableMeta
+from .database import field, ExperimentTableMeta
 from . import ndshape as nds
 import logging
 import sys, inspect
@@ -17,7 +17,7 @@ import haiku as hk
 import optax
 import matplotlib.pyplot as plt
 import pickle
-from functools import partial
+
 
 # A logger for this file
 log = logging.getLogger(__name__)
@@ -76,18 +76,7 @@ def reset_default_experiment_conf_files():
 
 
 class Experiment(metaclass=ExperimentTableMeta):
-    id: int = field(init=False, sql=sql.Column(sql.Integer, primary_key=True))
-    type: str = field(init=False, sql=sql.Column(sql.String(64)))
-    path: str = field(init=False, sql=sql.Column(sql.String(256)))
     n_repetitions: int = field(default=1, sql=sql.Column(sql.Integer))
-
-    __table_args__ = (
-        sql.UniqueConstraint("id", name="conf_unicity"),
-    )
-    __mapper_args__ = {
-        "polymorphic_identity": "Experiment",
-        "polymorphic_on": "type",
-    }
 
     @classmethod
     def defaults_as_dict(cls):
@@ -97,16 +86,9 @@ class Experiment(metaclass=ExperimentTableMeta):
             if isinstance(f.metadata[cls.__sa_dataclass_metadata_key__], sql.Column) and f.init
         }
 
-    def exists_in_db(self, session):
-        conf_unicity = next(filter(lambda c: c.name == 'conf_unicity', self.__table_args__))
-        unique = {column.name: self.__getattribute__(column.name) for column in conf_unicity}
-        statement = sql.select(self.__class__.id).filter_by(**unique).limit(1)
-        res = session.execute(statement).all()
-        return len(res) == 1
-
     def configure(self, repetition):
         self.current_repetition = repetition
-        self.root = f'experiments{self.path}{self.current_repetition.path}'
+        self.root = self.current_repetition.path
         log.info(f'resume experiment from {self.root}')
         if not os.path.isdir(self.path) or not os.listdir(self.path):
             os.makedirs(self.path, exist_ok=True)
@@ -130,7 +112,6 @@ class Experiment(metaclass=ExperimentTableMeta):
 
 
 class ExperimentType1(Experiment):
-    id: int = field(init=False, sql=sql.Column(sql.ForeignKey('experiments.id'), primary_key=True))
     ndshape_name: str = field(kw_only=True, sql=sql.Column(sql.String(128)))
     batch_size: int = field(default=1024, sql=sql.Column(sql.Integer))
     lr_decay_init_value: float = field(default=2e-3, sql=sql.Column(sql.Float(precision=8)))
@@ -143,21 +124,6 @@ class ExperimentType1(Experiment):
     network_depth: int = field(default=2, sql=sql.Column(sql.Integer))
     dilation_factor: int = field(default=10, sql=sql.Column(sql.Integer))
     log_base: int = field(default=10, sql=sql.Column(sql.Integer))
-    __table_args__ = (
-        sql.UniqueConstraint(
-            'batch_size',
-            'ndshape_name',
-            'lr_decay_init_value',
-            'lr_decay_transition_steps',
-            'lr_decay_decay_rate',
-            'lr_decay_transition_begin',
-            'lr_decay_staircase',
-            'lr_decay_end_value',
-            'network_depth',
-            'dilation_factor',
-            'log_base',
-            name='conf_unicity',
-    ),)
 
     def init_infrastructure(self):
         log.info('init_infrastructure')
@@ -310,53 +276,7 @@ class DimensionCollapse(ExperimentType1):
         plt.close(fig)
 
 
-class DimensionProject(ExperimentType1):
-    def init_networks(self):
-        self.bottleneck_dimension = self.shp._embedding_dimension
-        self.embedding_dimension = self.shp._embedding_dimension
-
-        def forward():
-            encode = hk.nets.MLP(
-                [self.embedding_dimension * self.dilation_factor] * self.network_depth +
-                [self.bottleneck_dimension],
-                activation=jnp.tanh,
-            )
-            decode = hk.nets.MLP(
-                [self.embedding_dimension * self.dilation_factor] * (self.network_depth - 1) +
-                [self.embedding_dimension],
-                activation=jnp.tanh,
-            )
-
-            def init(x):
-                z = encode(x)
-                projection, metadata = self.shp.project(z)
-                xx = decode(z)
-                return xx
-
-            return init, (encode, decode)
-
-        self.network = hk.without_apply_rng(hk.multi_transform(forward))
-        self.encode, self.decode = self.network.apply
-
-        @jax.jit
-        def reconstruction_loss_per_sample(network_params, samples):
-            z = self.encode(network_params, samples)
-            projection, metadata = self.shp.project(z)
-            reconstructions = self.decode(network_params, z)
-            return jnp.mean((samples - reconstructions) ** 2, axis=-1)
-
-        @jax.jit
-        def loss(network_params, samples):
-            z = self.encode(network_params, samples)
-            projection, metadata = self.shp.project(z)
-            reconstructions = self.decode(network_params, z)
-            loss_per_sample = jnp.mean((samples - reconstructions) ** 2, axis=-1)
-            loss_per_projection = jnp.mean((projection - z) ** 2, axis=-1)
-            return jnp.sum(loss_per_sample) + 10 * jnp.sum(loss_per_projection)
-
-        self.reconstruction_loss_per_sample = reconstruction_loss_per_sample
-        self.loss = loss
-
+class DimensionProjectBase(ExperimentType1):
     def plot(self, save=True):
         def end(fig):
             if save:
@@ -439,3 +359,100 @@ class DimensionProject(ExperimentType1):
         path = f'{self.root}/projection'
         os.makedirs(path, exist_ok=True)
         end(fig)
+
+
+class DimensionProjectType1(DimensionProjectBase):
+    def init_networks(self):
+        self.bottleneck_dimension = self.shp._embedding_dimension
+        self.embedding_dimension = self.shp._embedding_dimension
+
+        def forward():
+            encode = hk.nets.MLP(
+                [self.embedding_dimension * self.dilation_factor] * self.network_depth +
+                [self.bottleneck_dimension],
+                activation=jnp.tanh,
+            )
+            decode = hk.nets.MLP(
+                [self.embedding_dimension * self.dilation_factor] * (self.network_depth - 1) +
+                [self.embedding_dimension],
+                activation=jnp.tanh,
+            )
+
+            def init(x):
+                z = encode(x)
+                projection, metadata = self.shp.project(z)
+                xx = decode(z)
+                return xx
+
+            return init, (encode, decode)
+
+        self.network = hk.without_apply_rng(hk.multi_transform(forward))
+        self.encode, self.decode = self.network.apply
+
+        @jax.jit
+        def reconstruction_loss_per_sample(network_params, samples):
+            z = self.encode(network_params, samples)
+            projection, metadata = self.shp.project(z)
+            reconstructions = self.decode(network_params, z)
+            return jnp.mean((samples - reconstructions) ** 2, axis=-1)
+
+        @jax.jit
+        def loss(network_params, samples):
+            z = self.encode(network_params, samples)
+            projection, metadata = self.shp.project(z)
+            reconstructions = self.decode(network_params, z)
+            loss_per_sample = jnp.mean((samples - reconstructions) ** 2, axis=-1)
+            loss_per_projection = jnp.mean((projection - z) ** 2, axis=-1)
+            return jnp.sum(loss_per_sample) + 10 * jnp.sum(loss_per_projection)
+
+        self.reconstruction_loss_per_sample = reconstruction_loss_per_sample
+        self.loss = loss
+
+
+class DimensionProjectType2(DimensionProjectBase):
+    def init_networks(self):
+        self.bottleneck_dimension = self.shp._embedding_dimension
+        self.embedding_dimension = self.shp._embedding_dimension
+
+        def forward():
+            encode = hk.nets.MLP(
+                [self.embedding_dimension * self.dilation_factor] * self.network_depth +
+                [self.bottleneck_dimension],
+                activation=jnp.tanh,
+            )
+            decode = hk.nets.MLP(
+                [self.embedding_dimension * self.dilation_factor] * (self.network_depth - 1) +
+                [self.embedding_dimension],
+                activation=jnp.tanh,
+            )
+
+            def init(x):
+                z = encode(x)
+                projection, metadata = self.shp.project(z)
+                xx = decode(projection)
+                return xx
+
+            return init, (encode, decode)
+
+        self.network = hk.without_apply_rng(hk.multi_transform(forward))
+        self.encode, self.decode = self.network.apply
+
+        @jax.jit
+        def reconstruction_loss_per_sample(network_params, samples):
+            z = self.encode(network_params, samples)
+            projection, metadata = self.shp.project(z)
+            reconstructions = self.decode(network_params, projection)
+            return jnp.mean((samples - reconstructions) ** 2, axis=-1)
+
+        @jax.jit
+        def loss(network_params, samples):
+            z = self.encode(network_params, samples)
+            projection, metadata = self.shp.project(z)
+            reconstructions = self.decode(network_params, projection)
+            loss_per_sample = jnp.mean((samples - reconstructions) ** 2, axis=-1)
+            loss_per_projection = jnp.mean((projection - z) ** 2, axis=-1)
+            return jnp.sum(loss_per_sample) + 10 * jnp.sum(loss_per_projection)
+
+        self.reconstruction_loss_per_sample = reconstruction_loss_per_sample
+        self.loss = loss
+
