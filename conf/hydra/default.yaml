@@ -41,7 +41,7 @@ job_logging:
     - file
   loggers:
     sqlalchemy:
-      level: INFO
+      level: WARNING
     absl:
       level: CRITICAL
   disable_existing_loggers: false
