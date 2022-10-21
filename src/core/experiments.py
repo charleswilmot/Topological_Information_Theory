@@ -95,8 +95,9 @@ class Experiment(metaclass=ExperimentTableMeta):
         self.current_repetition = repetition
         self.root = self.current_repetition.path
         log.info(f'resume experiment from {self.root}')
-        if not os.path.isdir(self.path) or not os.listdir(self.path):
             os.makedirs(self.path, exist_ok=True)
+        if not os.path.isdir(self.root):
+            os.makedirs(self.root)
             self.init()
 
     def latest_checkpoint(self):
@@ -211,7 +212,7 @@ class ExperimentType1(Experiment):
         for iteration in range(self.iteration, next_checkpoint_it):
             self.key, = random.split(self.key, 1)
             samples = self.shp.sample(self.key, self.batch_size)
-            log.info(f'Iteration {iteration}')
+            log.debug(f'Iteration {iteration}')
             mse_loss, dloss_dtheta = jax.value_and_grad(self.loss)(self.network_params, samples)
             updates, self.learner_state = self.optimizer.update(dloss_dtheta, self.learner_state)
             self.network_params = optax.apply_updates(self.network_params, updates)
