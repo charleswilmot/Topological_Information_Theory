@@ -53,7 +53,7 @@ class ExperimentTableMeta(TableMeta):
             namespace['type'] = field(init=False, sql=type_col)
         else:              # some subclass of the root class
             # add the 'id' column to the subclass
-            id_col = sql.Column(sql.Integer, sql.ForeignKey(f'{bases[-1].__tablename__}.id'), primary_key=True)
+            id_col = sql.Column(sql.Integer, sql.ForeignKey(f'{bases[-1].__tablename__}.id', ondelete='cascade'), primary_key=True)
             namespace['__annotations__']['id'] = int
             namespace['id'] = field(init=False, sql=id_col)
         return name, bases, namespace
