@@ -30,7 +30,7 @@ class Repetition(metaclass=TableMeta):
 
 
 def there_is_work(session):
-    query = sql.select(Repetition).filter(sql.and_(
+    query = sql.select(Repetition.id).filter(sql.and_(
         Repetition.done == False,
         Repetition.running == False,
     ))

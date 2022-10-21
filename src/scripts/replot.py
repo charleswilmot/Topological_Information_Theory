@@ -2,7 +2,6 @@ import logging
 from ..core import database
 from ..core.experiments import *
 from ..core.repetitions import *
-import omegaconf
 import hydra
 
 
@@ -14,7 +13,7 @@ log = logging.getLogger(__name__)
 def main(cfg):
     engine = database.get_engine(cfg.database)
     with orm.Session(engine, future=True) as session:
-        query = sql.select(Repetition).join(Repetition.experiment).where(Experiment.type == cfg.type)
+        query = sql.select(Repetition).join(Experiment).where(Experiment.type == cfg.type)
         for repetition, in session.execute(query).all():
             experiment = repetition.experiment
             experiment.configure(repetition)
