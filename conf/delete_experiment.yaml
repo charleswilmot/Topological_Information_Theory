@@ -1,0 +1,5 @@
+experiment_id: ???
+
+defaults:
+  - hydra: default
+  - database: debug
