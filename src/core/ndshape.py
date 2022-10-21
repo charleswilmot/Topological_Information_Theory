@@ -2,6 +2,7 @@ import os
 import numpy as np
 from jax import random
 import jax.numpy as jnp
+import jax.lax as lax
 import haiku as hk
 from . import visualize
 import logging
@@ -83,6 +84,16 @@ class HyperCube(NDShapeBase):
     def project(points):
         return points, {}
 
+    @staticmethod
+    def regularize(z, projection_reg_coef, shape_reg_coef):
+        embedding_dimension = z.shape[-1]
+        #
+        barycenter = jnp.mean(z, axis=0)
+        barycenter_squared_dist = jnp.sum(barycenter ** 2)
+        clipped_barycenter_squared_dist = jnp.clip(barycenter_squared_dist, a_min=embedding_dimension * 0.15 ** 2)
+        #
+        return shape_reg_coef * jnp.sum(clipped_barycenter_squared_dist)
+
 
 class MultivariateGaussian(NDShapeBase):
     def __init__(self, dimension):
@@ -107,6 +118,16 @@ class MultivariateGaussian(NDShapeBase):
     @staticmethod
     def project(points):
         return points, {}
+
+    @staticmethod
+    def regularize(z, projection_reg_coef, shape_reg_coef):
+        embedding_dimension = z.shape[-1]
+        #
+        barycenter = jnp.mean(z, axis=0)
+        barycenter_squared_dist = jnp.sum(barycenter ** 2)
+        clipped_barycenter_squared_dist = jnp.clip(barycenter_squared_dist, a_min=embedding_dimension * 0.15 ** 2)
+        #
+        return shape_reg_coef * jnp.sum(clipped_barycenter_squared_dist)
 
 
 class HyperSphere(NDShapeBase):
@@ -157,6 +178,26 @@ class HyperSphere(NDShapeBase):
         offset = jnp.where(points[..., -1] < 0, 2 * jnp.pi, 0)
         metadata[f'theta{i}'] = offset + sign * metadata[f'theta{i}']
         return points, metadata
+
+    @staticmethod
+    def regularize(z, projection_reg_coef, shape_reg_coef):
+        embedding_dimension = z.shape[-1]
+        projection, metadata = HyperSphere.project(z)
+        #
+        loss_per_projection = jnp.mean((projection - z) ** 2, axis=-1)
+        #
+        barycenter = jnp.mean(z, axis=0)
+        barycenter_squared_dist = jnp.sum(barycenter ** 2)
+        clipped_barycenter_squared_dist = jnp.clip(barycenter_squared_dist, a_min=embedding_dimension * 0.15 ** 2)
+        #
+        squared_dist = jnp.sum(z ** 2, axis=-1)
+        clipped_squared_dist = jnp.clip(squared_dist, a_max=embedding_dimension * 0.5 ** 2)
+        #
+        return (
+            + projection_reg_coef * jnp.sum(loss_per_projection)
+            + shape_reg_coef * jnp.sum(clipped_barycenter_squared_dist)
+            - shape_reg_coef * jnp.sum(clipped_squared_dist)
+        )
 
 
 class HyperTorus(NDShapeBase):
@@ -213,6 +254,24 @@ class HyperTorus(NDShapeBase):
         for i, ax in enumerate(axs):
             ax.scatter(samples[:, i], samples[:, manifold_dimension + i], c=color)
 
+    @staticmethod
+    def regularize(z, projection_reg_coef, shape_reg_coef):
+        if z.shape[-1] % 2 != 0:
+            raise ValueError(f"The embedding has a dimension {z.shape[-1]}, can't project on a torus")
+        manifold_dimension = z.shape[-1] // 2
+        projection, metadata = HyperTorus.project(z)
+        #
+        loss_per_projection = jnp.mean((projection - z) ** 2, axis=-1)
+        #
+        barycenter = jnp.mean(z, axis=0)
+        barycenter_squared_dist = barycenter ** 2 # shape [manifold_dimension * 2]
+        barycenter_squared_dist = barycenter_squared_dist.reshape((2, manifold_dimension))
+        barycenter_squared_dist = jnp.sum(barycenter_squared_dist, axis=-2)
+        clipped_barycenter_squared_dist = jnp.clip(barycenter_squared_dist, a_min=0.15 ** 2)
+        return (
+            + projection_reg_coef * jnp.sum(loss_per_projection)
+            + shape_reg_coef * jnp.sum(clipped_barycenter_squared_dist)
+        )
 
 
 class ReparameterizedShape(NDShapeBase):
@@ -333,6 +392,25 @@ class KleinTube(ReparameterizedShape):
         metadata["phi"] = phi
         return points, metadata
 
+    @staticmethod
+    def regularize(z, projection_reg_coef, shape_reg_coef):
+        projection, metadata = KleinTube.project(z)
+        #
+        loss_per_projection = jnp.mean((projection - z) ** 2, axis=-1)
+        #
+        barycenter = jnp.mean(z, axis=0)
+        barycenter_squared_dist = barycenter[..., 0] ** 2 + barycenter[..., 1] ** 2
+        clipped_barycenter_squared_dist = jnp.clip(barycenter_squared_dist, a_min=0.15 ** 2)
+        #
+        xy_squared_dist = z[..., 0] ** 2 + z[..., 1] ** 2
+        clipped_squared_dist = jnp.clip(xy_squared_dist, a_max=0.5 ** 2)
+        #
+        return (
+            + projection_reg_coef * jnp.sum(loss_per_projection)
+            + shape_reg_coef * jnp.sum(clipped_barycenter_squared_dist)
+            - shape_reg_coef * jnp.sum(clipped_squared_dist)
+        )
+
 
 class MoebiusStrip(ReparameterizedShape):
     _R = 0.5
@@ -414,21 +492,26 @@ class MoebiusStrip(ReparameterizedShape):
         metadata['theta'] = theta
         metadata['c'] = c
         return points, metadata
-        # theta = jnp.arctan2(points[..., 0], points[..., 1])
-        # phi = jnp.arctan2(
-        #     jnp.sqrt(points[..., 0] ** 2 + points[..., 1] ** 2) - 1,
-        #     points[..., 2]
-        # )
-        # d = jnp.cos(phi - theta / 2)
-        # coef = 1 + MoebiusStrip._R * d * jnp.cos(theta / 2)
-        # a = coef * jnp.cos(theta)
-        # b = coef * jnp.sin(theta)
-        # c = MoebiusStrip._R * d * jnp.sin(theta / 2)
-        # points = jnp.stack([a, b, c], axis=-1)
-        # metadata = {}
-        # metadata['theta'] = theta
-        # metadata['d'] = d
-        # return points, metadata
+
+    @staticmethod
+    def regularize(z, projection_reg_coef, shape_reg_coef):
+        projection, metadata = MoebiusStrip.project(z)
+        #
+        loss_per_projection = jnp.mean((projection - z) ** 2, axis=-1)
+        #
+        barycenter = jnp.mean(z, axis=0)
+        barycenter_squared_dist = barycenter[..., 0] ** 2 + barycenter[..., 1] ** 2
+        clipped_barycenter_squared_dist = jnp.clip(barycenter_squared_dist, a_min=0.15 ** 2)
+        #
+        xy_squared_dist = z[..., 0] ** 2 + z[..., 1] ** 2
+        clipped_squared_dist = jnp.clip(xy_squared_dist, a_max=0.5 ** 2)
+        #
+        return (
+            + projection_reg_coef * jnp.sum(loss_per_projection)
+            + shape_reg_coef * jnp.sum(clipped_barycenter_squared_dist)
+            - shape_reg_coef * jnp.sum(clipped_squared_dist)
+        )
+
 
 
 class NDShapeProduct(NDShapeBase):
