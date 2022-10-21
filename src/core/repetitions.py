@@ -1,5 +1,6 @@
 import sqlalchemy as sql
 import sqlalchemy.orm as orm
+from sqlalchemy.ext.hybrid import hybrid_property
 from .database import field, TableMeta
 from . import experiments
 import logging
@@ -18,13 +19,11 @@ class Repetition(metaclass=TableMeta):
     priority: int = field(default_factory=int, sql=sql.Column(sql.Integer))
     done: bool = field(default_factory=bool, sql=sql.Column(sql.Boolean))
     running: bool = field(default_factory=bool, sql=sql.Column(sql.Boolean))
-    path: str = field(init=False, sql=orm.column_property(
-        sql.select(experiments.Experiment.path)
-        .where(experiments.Experiment.id == experiment_id)
-        .scalar_subquery() + '/' + repetition_id
-    ))
-
     experiment: experiments.Experiment = field(init=False, sql=orm.relationship("Experiment"))
+
+    @hybrid_property
+    def path(self):
+        return f'experiments/{self.experiment.type}/{self.experiment_id:04d}/{self.repetition_id:02d}'
 
     def is_most_urgent(self, session):
         return self.priority >= get_max_priority(session)

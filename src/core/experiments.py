@@ -1,5 +1,6 @@
 import sqlalchemy as sql
 import sqlalchemy.orm as orm
+from sqlalchemy.ext.hybrid import hybrid_property
 from dataclasses import MISSING, fields
 import yaml
 import re
@@ -77,6 +78,10 @@ def reset_default_experiment_conf_files():
 
 class Experiment(metaclass=ExperimentTableMeta):
     n_repetitions: int = field(default=1, sql=sql.Column(sql.Integer))
+
+    @hybrid_property
+    def path(self):
+        return f'experiments/{self.type}/{self.id:04d}'
 
     @classmethod
     def defaults_as_dict(cls):
