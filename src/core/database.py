@@ -51,9 +51,6 @@ class ExperimentTableMeta(TableMeta):
             type_col = sql.Column(sql.String(64))
             namespace['__annotations__']['type'] = str
             namespace['type'] = field(init=False, sql=type_col)
-            # add the 'path' column_property to the root class
-            namespace['__annotations__']['path'] = str
-            namespace['path'] = field(init=False, sql=orm.column_property(sql.func.printf("%s/%02d", type_col, id_col)))
         else:              # some subclass of the root class
             # add the 'id' column to the subclass
             id_col = sql.Column(sql.Integer, sql.ForeignKey(f'{bases[-1].__tablename__}.id'), primary_key=True)
