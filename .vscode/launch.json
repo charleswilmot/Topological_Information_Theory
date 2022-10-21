@@ -1,0 +1,23 @@
+{
+    // Use IntelliSense to learn about possible attributes.
+    // Hover to view descriptions of existing attributes.
+    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "delete_experiment",
+            "type": "python",
+            "request": "launch",
+            "module": "src.scripts.delete_experiment",
+            "justMyCode": true,
+            "args": ["experiment_id=123", "hydra.job_logging.loggers.sqlalchemy.level=INFO"],
+        },
+        {
+            "name": "worker",
+            "type": "python",
+            "request": "launch",
+            "module": "src.scripts.worker",
+            "justMyCode": true,
+        },
+    ]
+}
