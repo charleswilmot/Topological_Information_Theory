@@ -18,11 +18,17 @@ def main(cfg):
     with orm.Session(engine, future=True) as session:
         query = sql.select(Experiment).where(Experiment.id == cfg.experiment_id)
         experiment = session.execute(query).scalar()
+        if experiment is None:
+            raise ValueError(f"No experiment with id {cfg.experiment_id}")
         if os.path.isdir(experiment.path):
             shutil.rmtree(experiment.path)
-        table = experiment.__table__
-        query = sql.delete(table).where(table.id == cfg.experiment_id)
-        session.execute(query)
+
+        cls = experiment.__class__
+        while cls != object:
+            query = sql.delete(cls.__table__).where(cls.id == cfg.experiment_id)
+            session.execute(query)
+            cls = cls.__base__
+
         query = sql.delete(Repetition).where(Repetition.experiment_id == cfg.experiment_id)
         session.execute(query)
         session.commit()
