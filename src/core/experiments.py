@@ -115,10 +115,10 @@ class Experiment(metaclass=ExperimentTableMeta):
 
     def latest_checkpoint(self):
         # search latest checkpoint, restore
-        return int(min(os.listdir(self.root), key=int))
+        return int(min((x for x in os.listdir(self.root) if re.match('[0-9]+', x)), key=int))
 
     def list_checkpoints(self):
-        return list(int(x) for x in sorted(os.listdir(self.root), key=int))
+        return list(int(x) for x in sorted(os.listdir(self.root), key=int) if re.match('[0-9]+', x))
 
 
 class ExperimentType1(Experiment):
