@@ -12,3 +12,5 @@ n_iterations: 5000
 n_repetitions: 1
 ndshape_name: ???
 network_depth: 2
+projection_reg_coef: 1
+shape_reg_coef: 10
