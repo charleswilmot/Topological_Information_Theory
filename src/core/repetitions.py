@@ -17,8 +17,7 @@ class Repetition(metaclass=TableMeta):
     seed: int = field(sql=sql.Column(sql.Integer))
     current_step: int = field(default_factory=int, init=False, sql=sql.Column(sql.Integer))
     priority: int = field(default_factory=int, sql=sql.Column(sql.Integer))
-    done: bool = field(default_factory=bool, sql=sql.Column(sql.Boolean))
-    running: bool = field(default_factory=bool, sql=sql.Column(sql.Boolean))
+    status: str = field(default_factory=lambda: "queued", sql=sql.Column(sql.String(32)))
     experiment: experiments.Experiment = field(init=False, sql=orm.relationship("Experiment"))
 
     @hybrid_property
@@ -30,19 +29,13 @@ class Repetition(metaclass=TableMeta):
 
 
 def there_is_work(session):
-    query = sql.select(Repetition.id).filter(sql.and_(
-        Repetition.done == False,
-        Repetition.running == False,
-    ))
+    query = sql.select(Repetition.id).filter(Repetition.status == 'queued')
     res = session.execute(query).all()
     return len(res) > 0
 
 
 def get_max_priority(session):
-    max_priority_query = sql.select(sql.func.max(Repetition.priority)).filter(sql.and_(
-        Repetition.done == False,
-        Repetition.running == False,
-    ))
+    max_priority_query = sql.select(sql.func.max(Repetition.priority)).filter(Repetition.status == 'queued')
     max_priority, = session.execute(max_priority_query).first()
     if max_priority is None:
         return 0
@@ -53,8 +46,7 @@ def get_repetition(session):
     max_priority = get_max_priority(session)
     repetitions_query = sql.select(Repetition).filter(sql.and_(
         Repetition.priority == max_priority,
-        Repetition.done == False,
-        Repetition.running == False,
+        Repetition.status == 'queued',
     )).limit(1)
     repetition = session.execute(repetitions_query).first()
     return repetition[0]

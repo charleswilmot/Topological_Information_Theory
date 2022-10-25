@@ -16,7 +16,7 @@ def main(cfg):
     with orm.Session(engine, future=True) as session:
         while there_is_work(session):
             repetition = get_repetition(session)
-            repetition.running = True
+            repetition.status = 'running'
             session.commit()
             experiment = repetition.experiment
             try:
@@ -30,15 +30,14 @@ def main(cfg):
                     repetition.current_step = experiment.iteration
                     session.commit()
                 if experiment.finished():
-                    repetition.done = True
+                    repetition.status = 'done'
                     session.commit()
                     experiment.log()
             except:
                 log.critical('An exception has been raised...')
-                raise
-            finally:
-                repetition.running = False
+                repetition.status = 'failed'
                 session.commit()
+                raise
 
 
 if __name__ == '__main__':
