@@ -172,7 +172,7 @@ class ExperimentType1(Experiment):
 
     def restore(self, checkpoint):
         log.info(f'restoring {checkpoint=}')
-        checkpoint_str = checkpoint is isinstance(checkpoint, str) else f'{checkpoint:06d}'
+        checkpoint_str = checkpoint if isinstance(checkpoint, str) else f'{checkpoint:06d}'
         path = os.path.join(self.root, checkpoint_str)
         self.iteration = int(checkpoint)
         self.init_infrastructure()
@@ -187,7 +187,7 @@ class ExperimentType1(Experiment):
         log.info(f'checkpointing {self.iteration=}')
         if not os.path.isdir(self.root):
             raise RuntimeError(f"Directory is missing: {self.root}")
-        path = os.path.join(self.root, f'self.iteration:06d}')
+        path = os.path.join(self.root, f'{self.iteration:06d}')
         os.makedirs(path)
         with open(os.path.join(path, 'key.pkl'), 'wb') as f:
             pickle.dump(self.key, f)
@@ -345,9 +345,9 @@ class DimensionProject(ExperimentType1):
         # fig 2
         fig = plt.figure()
         nds.NDShapeBase.visualize_samples(fig, z, color=root_losses_per_samples)
-        end(fig, save, os.path.join(self.root,}/latent/{self.iteration:06d}.png'))
+        end(fig, save, os.path.join(self.root, 'latent', f'{self.iteration:06d}.png'))
         # fig 3
         fig = plt.figure()
         nds.NDShapeBase.visualize_samples(fig, projection, color=root_losses_per_samples)
-        end(fig, save, f'{self.root}/projection/{self.iteration:06d}.png'))
+        end(fig, save, os.path.join(self.root, 'projection', f'{self.iteration:06d}.png'))
 
