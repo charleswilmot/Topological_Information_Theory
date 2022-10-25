@@ -76,6 +76,15 @@ def reset_default_experiment_conf_files():
             log.info(f'experiment config file {filename}.yaml overwritten')
 
 
+def end(fig, save, filename):
+    if save:
+        os.makedirs(os.path.dirname(filename), exist_ok=True)
+        fig.savefig(filename, bbox_inches='tight')
+    else:
+        plt.show()
+    plt.close(fig)
+
+
 class Experiment(metaclass=ExperimentTableMeta):
     n_repetitions: int = field(default=1, sql=sql.Column(sql.Integer))
 
@@ -128,12 +137,12 @@ class ExperimentType1(Experiment):
 
     def init_infrastructure(self):
         log.info('init_infrastructure')
-        self.init_shape()
+        self.init_ndshape()
         self.init_optimizer()
         self.init_tensorboard()
         self.init_networks()
 
-    def init_shape(self):
+    def init_ndshape(self):
         self.shp = nds.NDShapeBase.by_name(self.ndshape_name)
 
     def init_optimizer(self):
@@ -151,11 +160,11 @@ class ExperimentType1(Experiment):
     def init_tensorboard(self):
         self.tensorboard = SummaryWriter(logdir=f'{self.root}/tensorboard/{self.shp._name}')
 
-    def init(self):
-        log.info(f'init repetition {self.current_repetition.repetition_id}')
+    def init(self, repetition):
+        log.info(f'init repetition {repetition.repetition_id}')
         self.iteration = 0
         self.init_infrastructure()
-        self.key = random.PRNGKey(self.current_repetition.seed)
+        self.key = random.PRNGKey(repetition.seed)
         dummy = jnp.zeros(shape=(1, self.embedding_dimension), dtype=jnp.float32)
         self.network_params = self.network.init(self.key, dummy)
         self.learner_state = self.optimizer.init(self.network_params)
@@ -210,7 +219,7 @@ class ExperimentType1(Experiment):
             self.key, = random.split(self.key, 1)
             samples = self.shp.sample(self.key, self.batch_size)
             log.debug(f'Iteration {iteration}')
-            mse_loss, dloss_dtheta = jax.value_and_grad(self.loss)(self.network_params, samples)
+            dloss_dtheta = jax.grad(self.loss)(self.network_params, samples)
             updates, self.learner_state = self.optimizer.update(dloss_dtheta, self.learner_state)
             self.network_params = optax.apply_updates(self.network_params, updates)
         self.iteration = next_checkpoint_it
@@ -257,114 +266,26 @@ class DimensionCollapse(ExperimentType1):
         self.reconstruction_loss_per_sample = reconstruction_loss_per_sample
         self.loss = loss
 
-    def plot(self):
-        log.info(f'plotting for iteration {self.iteration}')
-        samples = self.shp.mesh(100)
-        z = self.encode(self.network_params, samples)
-        reconstructions = self.decode(self.network_params, z)
-        losses_per_samples = jnp.mean((samples - reconstructions) ** 2, axis=-1)
-        # fig 1
-        fig = plt.figure()
-        self.shp.visualize_samples(fig, reconstructions, color=losses_per_samples)
-        path = f'{self.root}/reconstruction'
-        os.makedirs(path, exist_ok=True)
-        fig.savefig(f'{path}/{self.iteration:06d}.png')
-        plt.close(fig)
-        # fig 2
-        fig = plt.figure()
-        nds.NDShapeBase.visualize_samples(fig, z, color=losses_per_samples)
-        path = f'{self.root}/latent'
-        os.makedirs(path, exist_ok=True)
-        fig.savefig(f'{path}/{self.iteration:06d}.png')
-        plt.close(fig)
-
-
-class DimensionProjectBase(ExperimentType1):
     def plot(self, save=True):
-        def end(fig):
-            if save:
-                fig.savefig(f'{path}/{self.iteration:06d}.png')
-            else:
-                plt.show()
-            plt.close()
-
         log.info(f'plotting for iteration {self.iteration}')
         samples = self.shp.mesh(100)
-        complement = self.shp.edge(10000)
-        samples = jnp.concatenate([samples, complement], axis=0)
         z = self.encode(self.network_params, samples)
-        projection, metadata = self.shp.project(z)
         reconstructions = self.decode(self.network_params, z)
         root_losses_per_samples = jnp.sqrt(jnp.mean((samples - reconstructions) ** 2, axis=-1))
-        # tmp fig
-        fig = plt.figure()
-        ax = fig.add_subplot(111, projection='3d')
-        c = root_losses_per_samples[::10] / jnp.max(root_losses_per_samples[::10])
-        # Repeat for each body line and two head lines
-        c = jnp.concatenate((c, jnp.repeat(c, 2)))
-        # Colormap
-        c = plt.cm.viridis(c)
-
-        q = ax.quiver(
-            reconstructions[::10, 0],
-            reconstructions[::10, 1],
-            reconstructions[::10, 2],
-            samples[::10, 0] - reconstructions[::10, 0],
-            samples[::10, 1] - reconstructions[::10, 1],
-            samples[::10, 2] - reconstructions[::10, 2],
-            colors=c,
-        )
-        # q.set_array(root_losses_per_samples[::10] / jnp.max(root_losses_per_samples[::10]))
-        for axis in [ax.xaxis, ax.yaxis, ax.zaxis]:
-            axis.set_ticklabels([])
-        ax.set_xlim([-1, 1])
-        ax.set_ylim([-1, 1])
-        ax.set_zlim([-1, 1])
-        path = f'{self.root}/quiver'
-        os.makedirs(path, exist_ok=True)
-        end(fig)
-        # tmp fig
-        fig = plt.figure()
-        ax = fig.add_subplot(111, projection='3d')
-        q = ax.quiver(
-            z[::10, 0],
-            z[::10, 1],
-            z[::10, 2],
-            projection[::10, 0] - z[::10, 0],
-            projection[::10, 1] - z[::10, 1],
-            projection[::10, 2] - z[::10, 2],
-            colors=c,
-        )
-        # q.set_array(root_losses_per_samples[::10] / jnp.max(root_losses_per_samples[::10]))
-        for axis in [ax.xaxis, ax.yaxis, ax.zaxis]:
-            axis.set_ticklabels([])
-        ax.set_xlim([-1, 1])
-        ax.set_ylim([-1, 1])
-        ax.set_zlim([-1, 1])
-        path = f'{self.root}/quiver2'
-        os.makedirs(path, exist_ok=True)
-        end(fig)
         # fig 1
         fig = plt.figure()
         self.shp.visualize_samples(fig, reconstructions, color=root_losses_per_samples)
-        path = f'{self.root}/reconstruction'
-        os.makedirs(path, exist_ok=True)
-        end(fig)
+        end(fig, save, os.path.join(self.root, 'reconstruction', f'{self.iteration:06d}.png')
         # fig 2
         fig = plt.figure()
         nds.NDShapeBase.visualize_samples(fig, z, color=root_losses_per_samples)
-        path = f'{self.root}/latent'
-        os.makedirs(path, exist_ok=True)
-        end(fig)
-        # fig 3
-        fig = plt.figure()
-        nds.NDShapeBase.visualize_samples(fig, projection, color=root_losses_per_samples)
-        path = f'{self.root}/projection'
-        os.makedirs(path, exist_ok=True)
-        end(fig)
+        end(fig, save, os.path.join(self.root, 'latent', f'{self.iteration:06d}.png')
 
 
-class DimensionProjectType1(DimensionProjectBase):
+class DimensionProject(ExperimentType1):
+    projection_reg_coef: float = field(default=1, sql=sql.Column(sql.Float(precision=8)))
+    shape_reg_coef: float = field(default=10, sql=sql.Column(sql.Float(precision=8)))
+
     def init_networks(self):
         self.bottleneck_dimension = self.shp._embedding_dimension
         self.embedding_dimension = self.shp._embedding_dimension
@@ -402,60 +323,31 @@ class DimensionProjectType1(DimensionProjectBase):
         @jax.jit
         def loss(network_params, samples):
             z = self.encode(network_params, samples)
-            projection, metadata = self.shp.project(z)
             reconstructions = self.decode(network_params, z)
-            loss_per_sample = jnp.mean((samples - reconstructions) ** 2, axis=-1)
-            loss_per_projection = jnp.mean((projection - z) ** 2, axis=-1)
-            return jnp.sum(loss_per_sample) + 10 * jnp.sum(loss_per_projection)
+            reconstruction_term = jnp.sum(jnp.mean((samples - reconstructions) ** 2, axis=-1))
+            regularization_term = self.shp.regularize(z, self.projection_reg_coef, self.shape_reg_coef)
+            return reconstruction_term + regularization_term
 
         self.reconstruction_loss_per_sample = reconstruction_loss_per_sample
         self.loss = loss
 
-
-class DimensionProjectType2(DimensionProjectBase):
-    def init_networks(self):
-        self.bottleneck_dimension = self.shp._embedding_dimension
-        self.embedding_dimension = self.shp._embedding_dimension
-
-        def forward():
-            encode = hk.nets.MLP(
-                [self.embedding_dimension * self.dilation_factor] * self.network_depth +
-                [self.bottleneck_dimension],
-                activation=jnp.tanh,
-            )
-            decode = hk.nets.MLP(
-                [self.embedding_dimension * self.dilation_factor] * (self.network_depth - 1) +
-                [self.embedding_dimension],
-                activation=jnp.tanh,
-            )
-
-            def init(x):
-                z = encode(x)
-                projection, metadata = self.shp.project(z)
-                xx = decode(projection)
-                return xx
-
-            return init, (encode, decode)
-
-        self.network = hk.without_apply_rng(hk.multi_transform(forward))
-        self.encode, self.decode = self.network.apply
-
-        @jax.jit
-        def reconstruction_loss_per_sample(network_params, samples):
-            z = self.encode(network_params, samples)
-            projection, metadata = self.shp.project(z)
-            reconstructions = self.decode(network_params, projection)
-            return jnp.mean((samples - reconstructions) ** 2, axis=-1)
-
-        @jax.jit
-        def loss(network_params, samples):
-            z = self.encode(network_params, samples)
-            projection, metadata = self.shp.project(z)
-            reconstructions = self.decode(network_params, projection)
-            loss_per_sample = jnp.mean((samples - reconstructions) ** 2, axis=-1)
-            loss_per_projection = jnp.mean((projection - z) ** 2, axis=-1)
-            return jnp.sum(loss_per_sample) + 10 * jnp.sum(loss_per_projection)
-
-        self.reconstruction_loss_per_sample = reconstruction_loss_per_sample
-        self.loss = loss
+    def plot(self, save=True):
+        log.info(f'plotting for iteration {self.iteration}')
+        samples = self.shp.mesh(100)
+        z = self.encode(self.network_params, samples)
+        projection, metadata = self.shp.project(z)
+        reconstructions = self.decode(self.network_params, z)
+        root_losses_per_samples = jnp.sqrt(jnp.mean((samples - reconstructions) ** 2, axis=-1))
+        # fig 1
+        fig = plt.figure()
+        self.shp.visualize_samples(fig, reconstructions, color=root_losses_per_samples)
+        end(fig, save, os.path.join(self.root, 'reconstruction', f'{self.iteration:06d}.png')
+        # fig 2
+        fig = plt.figure()
+        nds.NDShapeBase.visualize_samples(fig, z, color=root_losses_per_samples)
+        end(fig, save, os.path.join(self.root,}/latent/{self.iteration:06d}.png')
+        # fig 3
+        fig = plt.figure()
+        nds.NDShapeBase.visualize_samples(fig, projection, color=root_losses_per_samples)
+        end(fig, save, f'{self.root}/projection/{self.iteration:06d}.png')
 
