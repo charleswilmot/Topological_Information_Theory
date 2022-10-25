@@ -275,11 +275,11 @@ class DimensionCollapse(ExperimentType1):
         # fig 1
         fig = plt.figure()
         self.shp.visualize_samples(fig, reconstructions, color=root_losses_per_samples)
-        end(fig, save, os.path.join(self.root, 'reconstruction', f'{self.iteration:06d}.png')
+        end(fig, save, os.path.join(self.root, 'reconstruction', f'{self.iteration:06d}.png'))
         # fig 2
         fig = plt.figure()
         nds.NDShapeBase.visualize_samples(fig, z, color=root_losses_per_samples)
-        end(fig, save, os.path.join(self.root, 'latent', f'{self.iteration:06d}.png')
+        end(fig, save, os.path.join(self.root, 'latent', f'{self.iteration:06d}.png'))
 
 
 class DimensionProject(ExperimentType1):
@@ -341,13 +341,13 @@ class DimensionProject(ExperimentType1):
         # fig 1
         fig = plt.figure()
         self.shp.visualize_samples(fig, reconstructions, color=root_losses_per_samples)
-        end(fig, save, os.path.join(self.root, 'reconstruction', f'{self.iteration:06d}.png')
+        end(fig, save, os.path.join(self.root, 'reconstruction', f'{self.iteration:06d}.png'))
         # fig 2
         fig = plt.figure()
         nds.NDShapeBase.visualize_samples(fig, z, color=root_losses_per_samples)
-        end(fig, save, os.path.join(self.root,}/latent/{self.iteration:06d}.png')
+        end(fig, save, os.path.join(self.root,}/latent/{self.iteration:06d}.png'))
         # fig 3
         fig = plt.figure()
         nds.NDShapeBase.visualize_samples(fig, projection, color=root_losses_per_samples)
-        end(fig, save, f'{self.root}/projection/{self.iteration:06d}.png')
+        end(fig, save, f'{self.root}/projection/{self.iteration:06d}.png'))
 
