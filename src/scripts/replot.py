@@ -17,8 +17,8 @@ def main(cfg):
         for repetition, in session.execute(query).all():
             experiment = repetition.experiment
             experiment.configure(repetition)
-            for checkpoint_path in experiment.list_checkpoints():
-                experiment.restore(checkpoint_path)
+            for checkpoint in experiment.list_checkpoints():
+                experiment.restore(checkpoint)
                 experiment.plot()
 
 

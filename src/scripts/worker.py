@@ -20,9 +20,9 @@ def main(cfg):
             session.commit()
             experiment = repetition.experiment
             try:
-                experiment.configure(repetition)
-                checkpoint_path = experiment.latest_checkpoint()
-                experiment.restore(checkpoint_path)
+                experiment.configure(cfg.database, repetition)
+                checkpoint = experiment.latest_checkpoint()
+                experiment.restore(checkpoint)
                 while repetition.is_most_urgent(session) and not experiment.finished():
                     experiment.log()
                     experiment.to_next_checkpoint()

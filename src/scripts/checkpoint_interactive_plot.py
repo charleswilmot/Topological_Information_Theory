@@ -20,8 +20,8 @@ def main(cfg):
         ))
         repetition, = session.execute(query).first()
         experiment = repetition.experiment
-        experiment.configure(repetition)
-        experiment.restore(f'experiments{experiment.path}{repetition.path}/{cfg.checkpoint:06d}')
+        experiment.configure(cfg.database, repetition)
+        experiment.restore(cfg.checkpoint)
         experiment.plot(save=False)
 
 

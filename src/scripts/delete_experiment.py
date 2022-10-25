@@ -20,8 +20,11 @@ def main(cfg):
         experiment = session.execute(query).scalar()
         if experiment is None:
             raise ValueError(f"No experiment with id {cfg.experiment_id}")
-        if os.path.isdir(experiment.path):
-            shutil.rmtree(experiment.path)
+
+        database_name = cfg.database.url.split('/')[-1].rstrip('.sqlite')
+        experiment_root = os.path.join('experiments', database_name, experiment.path)
+        if os.path.isdir(experiment_root):
+            shutil.rmtree(experiment_root)
 
         cls = experiment.__class__
         while cls != object:

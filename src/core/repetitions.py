@@ -23,7 +23,7 @@ class Repetition(metaclass=TableMeta):
 
     @hybrid_property
     def path(self):
-        return f'experiments/{self.experiment.type}/{self.experiment_id:04d}/{self.repetition_id:02d}'
+        return f'{self.repetition_id:02d}'
 
     def is_most_urgent(self, session):
         return self.priority >= get_max_priority(session)

@@ -81,7 +81,7 @@ class Experiment(metaclass=ExperimentTableMeta):
 
     @hybrid_property
     def path(self):
-        return f'experiments/{self.type}/{self.id:04d}'
+        return os.path.join(self.type, f'{self.id:04d}')
 
     @classmethod
     def defaults_as_dict(cls):
@@ -91,30 +91,25 @@ class Experiment(metaclass=ExperimentTableMeta):
             if isinstance(f.metadata[cls.__sa_dataclass_metadata_key__], sql.Column) and f.init
         }
 
-    def configure(self, repetition):
-        self.current_repetition = repetition
-        self.root = self.current_repetition.path
-        log.info(f'resume experiment from {self.root}')
-            os.makedirs(self.path, exist_ok=True)
-        if not os.path.isdir(self.root):
-            os.makedirs(self.root)
-            self.init()
+    def configure(self, database, repetition):
+        database_name = database.url.split('/')[-1].rstrip('.sqlite')
+        database_root = os.path.join('experiments', database_name)
+        experiment_root = os.path.join('experiments', database_name, self.path)
+        repetition_root = os.path.join('experiments', database_name, self.path, repetition.path)
+        self.root = repetition_root
+        must_init = not os.path.isdir(self.root)
+        log.info(f'resume experiment from {experiment_root}')
+        os.makedirs(database_root, exist_ok=True)
+        os.makedirs(experiment_root, exist_ok=True)
+        os.makedirs(repetition_root, exist_ok=True)
+        if must_init: self.init(repetition)
 
     def latest_checkpoint(self):
         # search latest checkpoint, restore
-        latest = "-1"
-        for dirname in os.listdir(self.root):
-            if os.path.isdir(os.path.join(self.root, dirname)) and re.match('[0-9]+', dirname):
-                latest = latest if int(dirname) < int(latest) else dirname
-        return os.path.join(self.root, latest)
+        return int(min(os.listdir(self.root), key=int))
 
     def list_checkpoints(self):
-        res = []
-        for dirname in os.listdir(self.root):
-            if os.path.isdir(os.path.join(self.root, dirname)) and re.match('[0-9]+', dirname):
-                res.append(os.path.join(self.root, dirname))
-        res.sort(key=lambda x: int(x.split('/')[-1]))
-        return res
+        return list(int(x) for x in sorted(os.listdir(self.root), key=int))
 
 
 class ExperimentType1(Experiment):
@@ -166,28 +161,30 @@ class ExperimentType1(Experiment):
         self.learner_state = self.optimizer.init(self.network_params)
         self.checkpoint()
 
-    def restore(self, path):
-        log.info(f'restoring {path=}')
-        self.iteration = int(path.split('/')[-1])
+    def restore(self, checkpoint):
+        log.info(f'restoring {checkpoint=}')
+        checkpoint_str = checkpoint is isinstance(checkpoint, str) else f'{checkpoint:06d}'
+        path = os.path.join(self.root, checkpoint_str)
+        self.iteration = int(checkpoint)
         self.init_infrastructure()
-        with open(f'{path}/key.pkl', 'rb') as f:
+        with open(os.path.join(path, 'key.pkl'), 'rb') as f:
             self.key = pickle.load(f)
-        with open(f'{path}/network_params.pkl', 'rb') as f:
+        with open(os.path.join(path, 'network_params.pkl'), 'rb') as f:
             self.network_params = pickle.load(f)
-        with open(f'{path}/learner_states.pkl', 'rb') as f:
+        with open(os.path.join(path, 'learner_states.pkl'), 'rb') as f:
             self.learner_state = pickle.load(f)
 
     def checkpoint(self):
         log.info(f'checkpointing {self.iteration=}')
         if not os.path.isdir(self.root):
             raise RuntimeError(f"Directory is missing: {self.root}")
-        path = f'{self.root}/{self.iteration:06d}'
+        path = os.path.join(self.root, f'self.iteration:06d}')
         os.makedirs(path)
-        with open(f'{path}/key.pkl', 'wb') as f:
+        with open(os.path.join(path, 'key.pkl'), 'wb') as f:
             pickle.dump(self.key, f)
-        with open(f'{path}/network_params.pkl', 'wb') as f:
+        with open(os.path.join(path, 'network_params.pkl'), 'wb') as f:
             pickle.dump(self.network_params, f)
-        with open(f'{path}/learner_states.pkl', 'wb') as f:
+        with open(os.path.join(path, 'learner_states.pkl'), 'wb') as f:
             pickle.dump(self.learner_state, f)
 
     def finished(self):
