@@ -1,4 +1,6 @@
-_target_: src.core.experiments.DimensionCollapse
+_target_: src.core.experiments.DimensionProject2
+anti_reduce_depth: 1
+barycenter_reg_coef: 1
 batch_size: 1024
 dilation_factor: 10
 log_base: 10
@@ -12,4 +14,5 @@ n_iterations: 5000
 n_repetitions: 1
 ndshape_name: ???
 network_depth: 2
-scrambling_depth: 1
+projection_reg_coef: 1
+reduce_depth: 1

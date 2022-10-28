@@ -162,9 +162,9 @@ class ExperimentType1(Experiment):
 
     def init(self, repetition):
         log.info(f'init repetition {repetition.repetition_id}')
+        self.key = random.PRNGKey(repetition.seed)
         self.iteration = 0
         self.init_infrastructure()
-        self.key = random.PRNGKey(repetition.seed)
         dummy = jnp.zeros(shape=(1, self.embedding_dimension), dtype=jnp.float32)
         self.network_params = self.network.init(self.key, dummy)
         self.learner_state = self.optimizer.init(self.network_params)
@@ -219,7 +219,7 @@ class ExperimentType1(Experiment):
             self.key, = random.split(self.key, 1)
             samples = self.shp.sample(self.key, self.batch_size)
             log.debug(f'Iteration {iteration}')
-            dloss_dtheta = jax.grad(self.loss)(self.network_params, samples)
+            dloss_dtheta = self.gradients(self.network_params, samples)
             updates, self.learner_state = self.optimizer.update(dloss_dtheta, self.learner_state)
             self.network_params = optax.apply_updates(self.network_params, updates)
         self.iteration = next_checkpoint_it
@@ -264,7 +264,7 @@ class DimensionCollapse(ExperimentType1):
             return jnp.sum(self.reconstruction_loss_per_sample(network_params, samples))
 
         self.reconstruction_loss_per_sample = reconstruction_loss_per_sample
-        self.loss = loss
+        self.gradients = jax.jit(jax.grad(loss))
 
     def plot(self, save=True):
         log.info(f'plotting for iteration {self.iteration}')
@@ -316,7 +316,6 @@ class DimensionProject(ExperimentType1):
         @jax.jit
         def reconstruction_loss_per_sample(network_params, samples):
             z = self.encode(network_params, samples)
-            projection, metadata = self.shp.project(z)
             reconstructions = self.decode(network_params, z)
             return jnp.mean((samples - reconstructions) ** 2, axis=-1)
 
@@ -329,7 +328,7 @@ class DimensionProject(ExperimentType1):
             return reconstruction_term + regularization_term
 
         self.reconstruction_loss_per_sample = reconstruction_loss_per_sample
-        self.loss = loss
+        self.gradients = jax.jit(jax.grad(loss))
 
     def plot(self, save=True):
         log.info(f'plotting for iteration {self.iteration}')
@@ -351,3 +350,127 @@ class DimensionProject(ExperimentType1):
         nds.NDShapeBase.visualize_samples(fig, projection, color=root_losses_per_samples)
         end(fig, save, os.path.join(self.root, 'projection', f'{self.iteration:06d}.png'))
 
+
+class DimensionProject2(ExperimentType1):
+    projection_reg_coef: float = field(default=1, sql=sql.Column(sql.Float(precision=8)))
+    barycenter_reg_coef: float = field(default=1, sql=sql.Column(sql.Float(precision=8)))
+    reduce_depth: int = field(default=1, sql=sql.Column(sql.Integer()))
+    anti_reduce_depth: int = field(default=1, sql=sql.Column(sql.Integer()))
+
+    def init_networks(self):
+        self.bottleneck_dimension = self.shp._embedding_dimension
+        self.embedding_dimension = self.shp._embedding_dimension
+        self.barycenter_estimate = jnp.mean(self.shp.sample(self.key, 2 ** 11), axis=0)
+
+        def forward():
+            encode = hk.nets.MLP(
+                [self.embedding_dimension * self.dilation_factor] * self.network_depth,
+                activation=jnp.tanh,
+                activate_final=True,
+                name='encode',
+            )
+            reduce = hk.nets.MLP(
+                [self.embedding_dimension * self.dilation_factor] * (self.reduce_depth - 1) +
+                [self.bottleneck_dimension],
+                activation=jnp.tanh,
+                name='reduce',
+            )
+            anti_reduce = hk.nets.MLP(
+                [self.embedding_dimension * self.dilation_factor] * self.anti_reduce_depth,
+                activation=jnp.tanh,
+                activate_final=True,
+                name='anti_reduce',
+            )
+            decode = hk.nets.MLP(
+                [self.embedding_dimension * self.dilation_factor] * (self.network_depth - 1) +
+                [self.embedding_dimension],
+                activation=jnp.tanh,
+                name='decode',
+            )
+
+            def init(x):
+                y = encode(x)
+                z = reduce(y)
+                projection, metadata = self.shp.project(z)
+                yy = anti_reduce(projection)
+                xx = decode(z)
+                return xx, yy
+
+            return init, (encode, reduce, anti_reduce, decode)
+
+        self.network = hk.without_apply_rng(hk.multi_transform(forward))
+        self.encode, self.reduce, self.anti_reduce, self.decode = self.network.apply
+
+        @jax.jit
+        def reconstruction_loss_per_sample(network_params, samples):
+            y = self.encode(network_params, samples)
+            z = self.reduce(network_params, y)
+            reconstructions = self.decode(network_params, z)
+            return jnp.mean((samples - reconstructions) ** 2, axis=-1)
+
+        @jax.jit
+        def reconstruction_loss(trainable_params, non_trainable_params, samples):
+            network_params = hk.data_structures.merge(trainable_params, non_trainable_params)
+            y = self.encode(network_params, samples)
+            z = self.reduce(network_params, y)
+            reconstructions = self.decode(network_params, z)
+            reconstruction_term = jnp.sum(jnp.mean((samples - reconstructions) ** 2, axis=-1))
+            return reconstruction_term
+
+        @jax.jit
+        def barycenter_loss(trainable_params, non_trainable_params, y):
+            network_params = hk.data_structures.merge(trainable_params, non_trainable_params)
+            z = self.reduce(network_params, y)
+            barycenter = jnp.mean(z, axis=0)
+            loss = jnp.sum((barycenter - self.barycenter_estimate) ** 2)
+            return loss * self.barycenter_reg_coef
+
+        @jax.jit
+        def reduce_loss(trainable_params, non_trainable_params, y):
+            network_params = hk.data_structures.merge(trainable_params, non_trainable_params)
+            z = self.reduce(network_params, y)
+            projection, metadata = self.shp.project(z)
+            yy = self.anti_reduce(network_params, projection)
+            projection_term = jnp.sum(jnp.mean((y - yy) ** 2, axis=-1))
+            return projection_term * self.projection_reg_coef
+
+        @jax.jit
+        def gradients(network_params, samples):
+            y = self.encode(network_params, samples)
+
+            def group_weights(m, n, v):
+                if m.startswith("reduce") and m.endswith(f"_{self.reduce_depth - 1}") and n == 'b': return 1
+                if m.startswith("reduce") or m.startswith("anti_reduce"): return 0
+                return 2
+
+            reduce_w, reduce_b, rest = hk.data_structures.partition_n(group_weights, network_params, 3)
+
+            reduce_grad = jax.grad(reduce_loss)(reduce_w, hk.data_structures.merge(reduce_b, rest), y)
+            barycenter_grad = jax.grad(barycenter_loss)(reduce_b, hk.data_structures.merge(reduce_w, rest), y)
+            reconstruction_grad = jax.grad(reconstruction_loss)(rest, hk.data_structures.merge(reduce_w, reduce_b), samples)
+            network_grad = hk.data_structures.merge(reduce_grad, barycenter_grad, reconstruction_grad)
+            return network_grad
+
+        self.reconstruction_loss_per_sample = reconstruction_loss_per_sample
+        self.gradients = gradients
+
+    def plot(self, save=True):
+        log.info(f'plotting for iteration {self.iteration}')
+        samples = self.shp.mesh(100)
+        y = self.encode(self.network_params, samples)
+        z = self.reduce(self.network_params, y)
+        projection, metadata = self.shp.project(z)
+        reconstructions = self.decode(self.network_params, z)
+        root_losses_per_samples = jnp.sqrt(jnp.mean((samples - reconstructions) ** 2, axis=-1))
+        # fig 1
+        fig = plt.figure()
+        self.shp.visualize_samples(fig, reconstructions, color=root_losses_per_samples)
+        end(fig, save, os.path.join(self.root, 'reconstruction', f'{self.iteration:06d}.png'))
+        # fig 2
+        fig = plt.figure()
+        nds.NDShapeBase.visualize_samples(fig, z, color=root_losses_per_samples)
+        end(fig, save, os.path.join(self.root, 'latent', f'{self.iteration:06d}.png'))
+        # fig 3
+        fig = plt.figure()
+        nds.NDShapeBase.visualize_samples(fig, projection, color=root_losses_per_samples)
+        end(fig, save, os.path.join(self.root, 'projection', f'{self.iteration:06d}.png'))
