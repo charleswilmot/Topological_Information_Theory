@@ -120,7 +120,7 @@ class Experiment(metaclass=ExperimentTableMeta):
         return int(min((x for x in os.listdir(self.root) if re.match('[0-9]+', x)), key=int))
 
     def list_checkpoints(self):
-        return list(int(x) for x in sorted(os.listdir(self.root), key=int) if re.match('[0-9]+', x))
+        return list(int(x) for x in sorted((y for y in os.listdir(self.root) if re.match('[0-9]+', y)), key=int))
 
 
 class ExperimentType1(Experiment):
@@ -178,13 +178,13 @@ class ExperimentType1(Experiment):
         checkpoint_str = checkpoint if isinstance(checkpoint, str) else f'{checkpoint:06d}'
         path = os.path.join(self.root, checkpoint_str)
         self.iteration = int(checkpoint)
-        self.init_infrastructure()
         with open(os.path.join(path, 'key.pkl'), 'rb') as f:
             self.key = pickle.load(f)
         with open(os.path.join(path, 'network_params.pkl'), 'rb') as f:
             self.network_params = pickle.load(f)
         with open(os.path.join(path, 'learner_states.pkl'), 'rb') as f:
             self.learner_state = pickle.load(f)
+        self.init_infrastructure()
 
     def checkpoint(self):
         log.info(f'checkpointing {self.iteration=}')
