@@ -1,0 +1,10 @@
+experiment_id: ???
+repetition_id: ???
+checkpoint: ???
+mesh: True
+mesh_size: 50
+sample_size: 2048
+
+defaults:
+  - hydra: default
+  - database: debug
