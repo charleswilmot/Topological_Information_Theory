@@ -16,7 +16,7 @@ def main(cfg):
         query = sql.select(Repetition).join(Experiment).where(Experiment.type == cfg.type)
         for repetition, in session.execute(query).all():
             experiment = repetition.experiment
-            experiment.configure(repetition)
+            experiment.configure(cfg.database, repetition)
             for checkpoint in experiment.list_checkpoints():
                 experiment.restore(checkpoint)
                 experiment.plot()
