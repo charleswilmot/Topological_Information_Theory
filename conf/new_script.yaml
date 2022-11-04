@@ -1,0 +1,5 @@
+script_name: ???
+script_args: ???
+
+defaults:
+  - hydra: default
