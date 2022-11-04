@@ -325,7 +325,6 @@ class KleinTube(ReparameterizedShape):
         self._acceptation_rate = 0.67
 
     def embed(self, theta, phi):
-        ret = jnp.empty(shape=theta.shape + (4, ))
         cos_phi = jnp.cos(phi)
         sin_phi = jnp.sin(phi)
         cos_theta = jnp.cos(theta)
@@ -374,13 +373,21 @@ class KleinTube(ReparameterizedShape):
     def project(points):
         if points.shape[-1] != 4:
             raise ValueError(f"The embedding has a dimension {points.shape[-1]}, can't project on a klein bottle")
-        theta = jnp.arctan2(points[..., 0], points[..., 1])
+        theta = jnp.arctan2(points[..., 1], points[..., 0])
         phi = jnp.arctan2(
+            jnp.sqrt(points[..., 2] ** 2 + points[..., 3] ** 2),
             jnp.sqrt(points[..., 0] ** 2 + points[..., 1] ** 2) - 1,
-            jnp.sqrt(points[..., 1] ** 2 + points[..., 2] ** 2),
         )
         cos_theta, sin_theta = jnp.cos(theta), jnp.sin(theta)
         cos_theta_2, sin_theta_2 = jnp.cos(theta / 2), jnp.sin(theta / 2)
+        phi = jnp.where(
+            jnp.logical_or(
+                jnp.logical_and(cos_theta_2 > 0, points[..., 2] > 0),
+                jnp.logical_and(cos_theta_2 < 0, points[..., 2] < 0),
+            ),
+            phi,
+            -phi
+        )
         cos_phi, sin_phi = jnp.cos(phi), jnp.sin(phi)
         a = (1 + KleinTube._R * cos_phi) * cos_theta
         b = (1 + KleinTube._R * cos_phi) * sin_theta
