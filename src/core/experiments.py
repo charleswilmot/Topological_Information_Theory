@@ -6,6 +6,7 @@ import yaml
 import re
 from .database import field, ExperimentTableMeta
 from . import ndshape as nds
+from .rotation import rotation_matrix, v_rotation_matrix
 import logging
 import sys, inspect
 import os
@@ -13,6 +14,7 @@ import shutil
 from tensorboardX import SummaryWriter
 import jax
 from jax import random
+from scipy.optimize import differential_evolution
 import jax.numpy as jnp
 import haiku as hk
 import optax
@@ -217,16 +219,17 @@ class ExperimentType1(Experiment):
     def to_next_checkpoint(self):
         next_checkpoint_it = get_next_checkpoint_it(self.iteration, base=self.log_base, start=self.log_start, maxi=self.n_iterations)
         log.info(f'training: {self.iteration} --> {next_checkpoint_it}')
-        next_checkpoint_it = get_next_checkpoint_it(self.iteration, base=self.log_base)
-        for iteration in range(self.iteration, next_checkpoint_it):
-            self.key, = random.split(self.key, 1)
-            samples = self.shp.sample(self.key, self.batch_size)
-            log.debug(f'Iteration {iteration}')
-            dloss_dtheta = self.gradients(self.network_params, samples)
-            updates, self.learner_state = self.optimizer.update(dloss_dtheta, self.learner_state)
-            self.network_params = optax.apply_updates(self.network_params, updates)
+        for self.iteration in range(self.iteration, next_checkpoint_it):
+            self.train()
         self.iteration = next_checkpoint_it
 
+    def train(self):
+        self.key, = random.split(self.key, 1)
+        samples = self.shp.sample(self.key, self.batch_size)
+        log.debug(f'Iteration {self.iteration}')
+        dloss_dtheta = self.gradients(self.network_params, samples)
+        updates, self.learner_state = self.optimizer.update(dloss_dtheta, self.learner_state)
+        self.network_params = optax.apply_updates(self.network_params, updates)
 
 class DimensionCollapse(ExperimentType1):
     def init_networks(self):
@@ -357,8 +360,8 @@ class DimensionProject(ExperimentType1):
 class DimensionProject2(ExperimentType1):
     projection_reg_coef: float = field(default=1, sql=sql.Column(sql.Float(precision=8)))
     barycenter_reg_coef: float = field(default=1, sql=sql.Column(sql.Float(precision=8)))
-    reduce_depth: int = field(default=1, sql=sql.Column(sql.Integer()))
-    anti_reduce_depth: int = field(default=1, sql=sql.Column(sql.Integer()))
+    rotate_every: int = field(default=10, sql=sql.Column(sql.Integer))
+    rotate_stop: int = field(default=100, sql=sql.Column(sql.Integer))
 
     def init_networks(self):
         self.bottleneck_dimension = self.shp._embedding_dimension
@@ -367,22 +370,16 @@ class DimensionProject2(ExperimentType1):
 
         def forward():
             encode = hk.nets.MLP(
-                [self.embedding_dimension * self.dilation_factor] * self.network_depth,
-                activation=jnp.tanh,
-                activate_final=True,
-                name='encode',
-            )
-            reduce = hk.nets.MLP(
-                [self.embedding_dimension * self.dilation_factor] * (self.reduce_depth - 1) +
+                [self.embedding_dimension * self.dilation_factor] * self.network_depth +
                 [self.bottleneck_dimension],
                 activation=jnp.tanh,
-                name='reduce',
+                name='encode',
             )
-            anti_reduce = hk.nets.MLP(
-                [self.embedding_dimension * self.dilation_factor] * self.anti_reduce_depth,
-                activation=jnp.tanh,
-                activate_final=True,
-                name='anti_reduce',
+            rotate = hk.nets.MLP(
+                [self.bottleneck_dimension],
+                activation=None,
+                with_bias=False,
+                name='rotate',
             )
             decode = hk.nets.MLP(
                 [self.embedding_dimension * self.dilation_factor] * (self.network_depth - 1) +
@@ -392,77 +389,162 @@ class DimensionProject2(ExperimentType1):
             )
 
             def init(x):
-                y = encode(x)
-                z = reduce(y)
-                projection, metadata = self.shp.project(z)
-                yy = anti_reduce(projection)
-                xx = decode(z)
-                return xx, yy
+                z = encode(x)
+                r = rotate(z)
+                reconstruction = decode(z)
+                return reconstruction
 
-            return init, (encode, reduce, anti_reduce, decode)
+            return init, (encode, rotate, decode)
 
         self.network = hk.without_apply_rng(hk.multi_transform(forward))
-        self.encode, self.reduce, self.anti_reduce, self.decode = self.network.apply
+        self.encode, self.rotate, self.decode = self.network.apply
 
         @jax.jit
         def reconstruction_loss_per_sample(network_params, samples):
-            y = self.encode(network_params, samples)
-            z = self.reduce(network_params, y)
+            z = self.encode(network_params, samples)
+            # r = self.rotate(network_params, z)
             reconstructions = self.decode(network_params, z)
             return jnp.mean((samples - reconstructions) ** 2, axis=-1)
 
         @jax.jit
         def reconstruction_loss(trainable_params, non_trainable_params, samples):
             network_params = hk.data_structures.merge(trainable_params, non_trainable_params)
-            y = self.encode(network_params, samples)
-            z = self.reduce(network_params, y)
+            z = self.encode(network_params, samples)
+            # r = self.rotate(network_params, z)
             reconstructions = self.decode(network_params, z)
             reconstruction_term = jnp.sum(jnp.mean((samples - reconstructions) ** 2, axis=-1))
             return reconstruction_term
 
         @jax.jit
-        def barycenter_loss(trainable_params, non_trainable_params, y):
+        def barycenter_loss(trainable_params, non_trainable_params, samples):
             network_params = hk.data_structures.merge(trainable_params, non_trainable_params)
-            z = self.reduce(network_params, y)
+            z = self.encode(network_params, samples)
             barycenter = jnp.mean(z, axis=0)
-            loss = jnp.sum((barycenter - self.barycenter_estimate) ** 2)
+            loss = jnp.sum(barycenter ** 2)
             return loss * self.barycenter_reg_coef
 
         @jax.jit
-        def reduce_loss(trainable_params, non_trainable_params, y):
+        def reduce_loss(trainable_params, non_trainable_params, samples):
             network_params = hk.data_structures.merge(trainable_params, non_trainable_params)
-            z = self.reduce(network_params, y)
-            projection, metadata = self.shp.project(z)
-            yy = self.anti_reduce(network_params, projection)
-            projection_term = jnp.sum(jnp.mean((y - yy) ** 2, axis=-1))
+            z = self.encode(network_params, samples)
+            r = self.rotate(network_params, z)
+            projection, metadata = self.shp.project(r)
+            projection_term = jnp.sum(jnp.mean((r - projection) ** 2, axis=-1))
             return projection_term * self.projection_reg_coef
 
         @jax.jit
+        def total_loss(trainable_params, non_trainable_params, samples):
+            return (
+                reconstruction_loss(trainable_params, non_trainable_params, samples) +
+                reduce_loss(trainable_params, non_trainable_params, samples)
+            )
+
+        @jax.jit
         def gradients(network_params, samples):
-            y = self.encode(network_params, samples)
 
             def group_weights(m, n, v):
-                if m.startswith("reduce") and m.endswith(f"_{self.reduce_depth - 1}") and n == 'b': return 1
-                if m.startswith("reduce") or m.startswith("anti_reduce"): return 0
+                if m.startswith("rotate"): return 0
+                if m.startswith("encode") and m.endswith(f"_{self.network_depth - 1}") and n == 'b': return 1
                 return 2
 
-            reduce_w, reduce_b, rest = hk.data_structures.partition_n(group_weights, network_params, 3)
-
-            reduce_grad = jax.grad(reduce_loss)(reduce_w, hk.data_structures.merge(reduce_b, rest), y)
-            barycenter_grad = jax.grad(barycenter_loss)(reduce_b, hk.data_structures.merge(reduce_w, rest), y)
-            reconstruction_grad = jax.grad(reconstruction_loss)(rest, hk.data_structures.merge(reduce_w, reduce_b), samples)
-            network_grad = hk.data_structures.merge(reduce_grad, barycenter_grad, reconstruction_grad)
+            rotation_params, barycenter_params, reconstruction_params = hk.data_structures.partition_n(
+                group_weights,
+                network_params,
+                3
+            )
+            rotation_grad = {'rotate/~/linear_0': {'w': jnp.zeros(self.bottleneck_dimension)}}
+            barycenter_grad = jax.grad(barycenter_loss)(barycenter_params, hk.data_structures.merge(rotation_params, reconstruction_params), samples)
+            reconstruction_grad = jax.grad(total_loss)(reconstruction_params, hk.data_structures.merge(rotation_params, barycenter_params), samples)
+            network_grad = hk.data_structures.merge(rotation_grad, barycenter_grad, reconstruction_grad)
             return network_grad
 
         self.reconstruction_loss_per_sample = reconstruction_loss_per_sample
         self.gradients = gradients
 
+    def search_rotation_matrix(self,
+            bounds=jnp.pi, tol=0.0001, maxiter=100, popsize=4, mutation=(0.2, 0.9), recombination=0.7, seed=1, log_plots=False, log_plots_name=''):
+        samples = self.shp.sample(self.key, self.batch_size)
+        z = self.encode(self.network_params, samples)
+        n_angles = self.bottleneck_dimension * (self.bottleneck_dimension - 1) // 2
+        x0 = jnp.zeros(shape=(n_angles,))
+        callback = None
+        if log_plots:
+            dirname = os.path.join(self.root, 'search_rotation_matrix')
+            os.makedirs(dirname, exist_ok=True)
+            fig = plt.figure()
+            best_solution = jnp.zeros(shape=(n_angles,))
+            count = 0
+
+            def callback(xk, convergence):
+                nonlocal count, best_solution
+                if jnp.any(xk != best_solution):
+                    best_solution = xk
+                    rot = rotation_matrix(xk, self.bottleneck_dimension)
+                    rotated = z @ rot + self.barycenter_estimate
+                    projection, metadata = self.shp.project(rotated)
+                    rmse = jnp.sqrt(jnp.sum((rotated - projection) ** 2, axis=-1))
+                    nds.NDShapeBase.visualize_samples(fig, rotated, color=rmse)
+                    filepath = os.path.join(dirname, f'{log_plots_name}_it{self.iteration:06d}_{count:03d}.png')
+                    fig.savefig(filepath, dpi=300)
+                    fig.clear()
+                count += 1
+
+        res = differential_evolution(
+            func=self.minimization_target,
+            x0=x0,
+            args=(z,),
+            disp=True,
+            bounds=[(-bounds, bounds)] * n_angles,
+            vectorized=True,
+            popsize=popsize,
+            tol=tol,
+            mutation=mutation,
+            seed=seed,
+            recombination=recombination,
+            maxiter=maxiter,
+            callback=callback,
+        )
+        log.info(f'angles={res.x}')
+        log.info(f'final MRSE={res.fun}')
+        log.info(f'{res.nfev=}')
+        log.info(f'{res.nit=}')
+        log.info(f'{res.success=}')
+        if log_plots:
+            plt.close(fig)
+
+        return rotation_matrix(res.x, self.bottleneck_dimension)
+
+    def train(self):
+        if self.iteration and self.iteration % self.rotate_every == 0 and self.iteration <= self.rotate_stop:
+            log.info(f"Searching best rotation matrix (iteration = {self.iteration})")
+            rot = self.search_rotation_matrix(
+                bounds=jnp.pi,
+                tol=0.0001,
+                maxiter=100,
+                popsize=4,
+                mutation=(0.2, 0.9),
+                recombination=0.7,
+                seed=1
+            )
+            self.network_params["rotate/~/linear_0"]["w"] = rot
+        super().train()
+
+    def minimization_target(self, angles, z):
+        if angles.ndim == 1:
+            angles = angles[..., None]
+        angles = angles.T
+        rot = v_rotation_matrix(angles, self.bottleneck_dimension)
+        rotated = z @ rot + self.barycenter_estimate
+        projection, metadata = self.shp.project(rotated)
+        dist = jnp.mean(jnp.sqrt(jnp.sum((projection - rotated) ** 2, axis=-1)), axis=-1)
+        return dist
+
     def plot(self, save=True):
         log.info(f'plotting for iteration {self.iteration}')
-        samples = self.shp.mesh(100)
-        y = self.encode(self.network_params, samples)
-        z = self.reduce(self.network_params, y)
-        projection, metadata = self.shp.project(z)
+        samples = self.shp.mesh(30)
+        z = self.encode(self.network_params, samples)
+        r = self.rotate(self.network_params, z)
+        projection, metadata = self.shp.project(r + self.barycenter_estimate)
         reconstructions = self.decode(self.network_params, z)
         root_losses_per_samples = jnp.sqrt(jnp.mean((samples - reconstructions) ** 2, axis=-1))
         # fig 1
@@ -474,6 +556,10 @@ class DimensionProject2(ExperimentType1):
         nds.NDShapeBase.visualize_samples(fig, z, color=root_losses_per_samples)
         end(fig, save, os.path.join(self.root, 'latent', f'{self.iteration:06d}.png'))
         # fig 3
+        fig = plt.figure()
+        nds.NDShapeBase.visualize_samples(fig, r, color=root_losses_per_samples)
+        end(fig, save, os.path.join(self.root, 'rotated', f'{self.iteration:06d}.png'))
+        # fig 4
         fig = plt.figure()
         nds.NDShapeBase.visualize_samples(fig, projection, color=root_losses_per_samples)
         end(fig, save, os.path.join(self.root, 'projection', f'{self.iteration:06d}.png'))
