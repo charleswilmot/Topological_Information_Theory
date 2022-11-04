@@ -37,14 +37,16 @@ def get_smallest_exponent(iteration, base=10):
     return smallest_exponent - 1
 
 
-def get_next_checkpoint_it(iteration, base=10):
+def get_next_checkpoint_it(iteration, base=10, start=1000, maxi=jnp.inf):
     if iteration == 0:
-        return 1
+        return min(1, maxi)
+    if iteration < start:
+        return min(start, maxi)
     smallest_exponent = get_smallest_exponent(iteration, base=base)
     smallest_pow = base ** smallest_exponent
     below = smallest_pow * (iteration // smallest_pow)
     above = below + smallest_pow
-    return  above
+    return  min(above, maxi)
 
 
 def reset_default_experiment_conf_files():
@@ -134,6 +136,7 @@ class ExperimentType1(Experiment):
     network_depth: int = field(default=2, sql=sql.Column(sql.Integer))
     dilation_factor: int = field(default=10, sql=sql.Column(sql.Integer))
     log_base: int = field(default=10, sql=sql.Column(sql.Integer))
+    log_start: int = field(default=1000, sql=sql.Column(sql.Integer))
 
     def init_infrastructure(self):
         log.info('init_infrastructure')
@@ -212,7 +215,7 @@ class ExperimentType1(Experiment):
         self.plot()
 
     def to_next_checkpoint(self):
-        next_checkpoint_it = get_next_checkpoint_it(self.iteration, base=self.log_base)
+        next_checkpoint_it = get_next_checkpoint_it(self.iteration, base=self.log_base, start=self.log_start, maxi=self.n_iterations)
         log.info(f'training: {self.iteration} --> {next_checkpoint_it}')
         next_checkpoint_it = get_next_checkpoint_it(self.iteration, base=self.log_base)
         for iteration in range(self.iteration, next_checkpoint_it):
