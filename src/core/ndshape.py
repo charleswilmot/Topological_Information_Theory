@@ -561,6 +561,17 @@ class NDShapeProduct(NDShapeBase):
             start = stop
         return res.reshape((n ** md, ed))
 
+    def project(self, points):
+        start = 0
+        metadata = {}
+        projections = []
+        for i, f in enumerate(self._factors):
+            stop = start + f._embedding_dimension
+            p, m = f.project(points[..., start:stop])
+            projections.append(p)
+            metadata[f'{i}__{f._name}'] = m
+        return jnp.concatenate(projections, axis=-1), metadata
+
 
 class CachedNDShape(NDShapeBase):
     def __init__(self, ndshape):
@@ -788,6 +799,8 @@ class ScramblesNDShape(NDShapeBase):
     def sample(self, key, n):
         return self.scramble(self._ndshape.sample(key, n))
 
+    def project(self, points):
+        return self._ndshape.project(points)
 
 if __name__ == '__main__':
     import matplotlib.pyplot as plt
