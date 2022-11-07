@@ -1,5 +1,4 @@
 _target_: src.core.experiments.DimensionProject2
-anti_reduce_depth: 1
 barycenter_reg_coef: 1
 batch_size: 1024
 dilation_factor: 10
@@ -16,4 +15,5 @@ n_repetitions: 1
 ndshape_name: ???
 network_depth: 2
 projection_reg_coef: 1
-reduce_depth: 1
+rotate_every: 10
+rotate_stop: 100
