@@ -1,0 +1,35 @@
+ndshape_name: hypercube2
+seed: 0
+network_depth: 3
+network_width: 200
+rotate_every: 100
+rotate_stop: 2000
+batch_size: 1024
+barycenter_reg_coef: 1
+projection_reg_coef: 0.01
+lr:
+  decay_init_value: 4e-3
+  decay_transition_steps: 10000
+  decay_decay_rate: 0.5
+  decay_transition_begin: 1000
+  decay_staircase: False
+  decay_end_value: 1e-4
+alpha:
+  decay_init_value: 1
+  decay_transition_steps: 2000
+  decay_decay_rate: 0.5
+  decay_transition_begin: 1000
+  decay_staircase: False
+  decay_end_value: 0
+differential_evolution:
+  bounds: 3.141592
+  tol: 0.0001
+  maxiter: 100
+  popsize: 4
+  mutation: [0.2, 0.9]
+  recombination: 0.7
+
+
+
+defaults:
+  - hydra: default
