@@ -1,5 +1,4 @@
 import sqlalchemy as sql
-import sqlalchemy.orm as orm
 from sqlalchemy.ext.hybrid import hybrid_property
 from dataclasses import MISSING, fields
 import yaml
@@ -230,6 +229,7 @@ class ExperimentType1(Experiment):
         dloss_dtheta = self.gradients(self.network_params, samples)
         updates, self.learner_state = self.optimizer.update(dloss_dtheta, self.learner_state)
         self.network_params = optax.apply_updates(self.network_params, updates)
+
 
 class DimensionCollapse(ExperimentType1):
     def init_networks(self):
@@ -663,8 +663,8 @@ class DimensionProject3(ExperimentType1):
             )
 
         @jax.jit
-        def gradients(network_params, samples):
-            rotation_grad = {'rotate': {"w": jnp.zeros_like(self.network_params['rotate']['w'])}}
+        def _gradients(network_params, alpha, samples):
+            rotation_grad = {'rotate': {"w": jnp.zeros_like(network_params['rotate']['w'])}}
 
             barycenter_params, non_trainable_params = hk.data_structures.partition(lambda m, n, v:
                 m.startswith("encode") and m.endswith(f"_{self.network_depth - 1}") and n == 'b',
@@ -677,13 +677,16 @@ class DimensionProject3(ExperimentType1):
                 not (m.startswith("encode") and m.endswith(f"_{self.network_depth - 1}") and n == 'b'),
                 network_params,
             )
-            reconstruction_grad = jax.grad(total_loss)(reconstruction_params, non_trainable_params, self.alpha(self.iteration), samples)
+            reconstruction_grad = jax.grad(total_loss)(reconstruction_params, non_trainable_params, alpha, samples)
 
             network_grad = hk.data_structures.merge(rotation_grad, barycenter_grad, reconstruction_grad)
             return network_grad
 
         self.reconstruction_loss_per_sample = reconstruction_loss_per_sample
-        self.gradients = gradients
+        self._gradients = _gradients
+
+    def gradients(self, network_params, samples):
+        return self._gradients(network_params, self.alpha(self.interation), samples)
 
     def search_rotation_matrix(self,
             bounds=jnp.pi, tol=0.0001, maxiter=100, popsize=4, mutation=(0.2, 0.9), recombination=0.7, seed=1, log_plots=False, log_plots_name=''):
